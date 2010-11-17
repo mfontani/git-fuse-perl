@@ -1,0 +1,216 @@
+#!/usr/bin/env perl
+# Copyright (c) 2010, Marco Fontani <mfontani@cpan.org>.
+# A Git FUSE filesystem, in Perl.
+use strict;
+use warnings;
+
+use Data::Dumper;
+use Fuse;
+use POSIX qw/ENOENT EISDIR EINVAL/;
+
+sub DEBUG () { 1 }
+sub DIR ()   { 0040 }
+sub FILE ()  { 0100 }
+sub RONLY () { 0444 }
+sub RX ()    { 0555 }
+sub MODE { ($_[0]<<9)+$_[1] }
+
+die "Must be launched from a checked-out Git repository" if (!-d '.git');
+
+my $mountpoint = shift;
+die "Usage: $0 mountpoint" if !defined $mountpoint;
+
+my $root = {
+  '.'     => { type => DIR(), mode => RX(), ctime => time(), },
+  'heads' => { type => DIR(), mode => RX(), ctime => time(), },
+  'tags'  => { type => DIR(), mode => RX(), ctime => time(), },
+};
+
+Fuse::main(
+  mountpoint => $mountpoint,
+  getattr    => 'main::e_getattr',
+  getdir     => 'main::e_getdir',
+  open       => 'main::e_open',
+  statfs     => 'main::e_statfs',
+  read       => 'main::e_read',
+  threaded   => 0,
+);
+
+sub filename_fixup { $_[0] =~ s!^/!!; $_[0] = '.' unless length $_[0]; $_[0] }
+
+sub get_git_info {
+    my ($head,$file) = @_;
+    $file = '' if !defined $file;
+    warn "get_git_info($head,$file)" if DEBUG;
+    my $type = qx{git cat-file -t $head:$file};
+    chomp($type);
+    if (!length $type) {
+        warn "get_git_info($head,$file): unknown to Git" if DEBUG;
+        return [];
+    }
+    my $size = 0;
+    my $modes = MODE(DIR(),RX());
+    my $data = undef;
+    if ( $type eq 'blob' ) {
+        $size = qx{git cat-file -s $head:$file};
+        chomp($size);
+        $data = qx{git cat-file -p $head:$file};
+        $modes = MODE(FILE(),RONLY());
+    }
+    warn "get_git_info($head,$file): $type, size $size" if DEBUG;
+    return [$type,$modes,$size,$data];
+}
+
+sub e_getattr
+{
+    my $file = filename_fixup( $_[0] );
+    my ($dev, $ino, $rdev, $blocks, $gid, $uid, $nlink, $blksize) = (0,0,0,1,0,0,1,1024);
+    warn "\n\n" if DEBUG;
+    warn "e_getattr($file)" if DEBUG;
+    my ($atime,$mtime,$ctime) = (time,time,time);
+    if (!exists $root->{$file})
+    {
+        if ($file =~ /^heads\/(.*)$/) {
+            my $head = $1;
+            my $path = '';
+            if ( $head =~ /^([^\/]*)\/(.*)$/ ) {
+                $head = $1;
+                $path = $2;
+                warn "e_getattr($file): head $head path $path" if DEBUG;
+            }
+            my $data = get_git_info($head,$path);
+            if (!defined $data->[0]) {
+                warn "e_getattr($file): ENOENT" if DEBUG;
+                return -ENOENT();
+            }
+            my $modes = $data->[1];
+            my $size = $data->[2];
+            warn "e_getattr($file) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks)" if DEBUG;
+            return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks);
+        }
+        warn "e_getattr($file): ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    # Existing pre-made dir
+    my $modes = MODE( DIR(), RX() );
+    my $size  = 0;
+    warn "e_getattr($file)(cached) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks)" if DEBUG;
+    return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks);
+}
+
+sub e_getdir
+{
+    my $where = shift;
+    warn "\n\n" if DEBUG;
+    warn "e_getdir($where)" if DEBUG;
+    if ($where eq '/') {
+        warn "e_getdir($where) => heads tags 0" if DEBUG;
+        return (qw/heads tags/), 0;
+    };
+    if ( $where eq '/tags' ) {
+        my @tags = split("\n",qx{git tag});
+        warn "e_getdir($where) (tags) => @tags, 0" if DEBUG;
+        return @tags, 0;
+    }
+    if ( $where eq '/heads' ) {
+        my @heads = split("\n",qx{git branch});
+        for (@heads) { $_ =~ s/^\s+//; $_ =~ s/^\*\s+//; }
+        warn "e_getdir($where) (heads)=> @heads, 0" if DEBUG;
+        return @heads, 0;
+    }
+    if ( $where =~ m/^\/?heads\/(.*)$/ ) {
+        my $head = $1;
+        my $path = '';
+        my $thing = $head;
+        if ( $head =~ /^([^\/]*)\/(.*)$/ ) {
+            $head = $1;
+            $path = $2;
+            $thing = "$head:$path";
+        }
+        my @lines = qx{git ls-tree $thing};
+        warn "e_getdir($where): executed 'git ls-tree $thing'" if DEBUG;
+        warn "e_getdir($where) (head $head path $path): ls-tree $thing\n@lines\n" if DEBUG;
+        chomp @lines;
+        if (!@lines) {
+            warn "e_getdir($where) ($head|$path) => empty ls-tree => ENOENT" if DEBUG;
+            return -ENOENT();
+        }
+        # 100644 blob 86cff4ec63304bcf51596839f3582ba293889bbf  Makefile
+        my @things;
+        for my $line (@lines) {
+            my ($stuff,$name) = split("\t", $line);
+            my ($perm,$kind,$sha) = split(" ", $stuff);
+            push @things, $name;
+        }
+        warn "e_getdir($where) (ls-tree) => @things, 0" if DEBUG;
+        return @things, 0;
+    }
+    warn "e_getdir($where) => ENOENT" if DEBUG;
+    return -ENOENT();
+}
+
+sub e_open {
+    my ($file) = filename_fixup(shift);
+    warn "e_open($file)" if DEBUG;
+    if ( exists $root->{$file} ) {
+        warn "e_open($file) OK is a root file, 0" if DEBUG;
+        return 0;
+    }
+    if ( $file !~ /^heads\/(.*)$/ ) {
+        warn "e_open($file) unimplemented ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    my $head = $1;
+    my $thing = '';
+    if ( $head =~ /^([^\/]+)\/(.*)$/ ) {
+        $head = $1;
+        $thing = $2;
+    }
+    my $data = get_git_info($head,$thing);
+    if (!defined $data->[0]) {
+        warn "e_open($file): ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    if ($data->[0] eq 'tree') {
+        warn "e_open($file): EISDIR" if DEBUG;
+        return -EISDIR();
+    }
+    warn "e_open($file) OK is a file, 0" if DEBUG;
+    return 0;
+}
+
+sub e_read
+{
+    my $file = filename_fixup(shift);
+    warn "\n\n" if DEBUG;
+    my ($buf, $off) = @_;
+    warn "e_read($file, buf $buf, offset $off)" if DEBUG;
+    if ( $file !~ /^heads\/(.*)$/ ) {
+        warn "e_open($file) unimplemented ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    my $head = $1;
+    my $thing = '';
+    if ( $head =~ /^([^\/]+)\/(.*)$/ ) {
+        $head = $1;
+        $thing = $2;
+    }
+    my $data = get_git_info($head,$thing);
+    if (!defined $data->[0]) {
+        warn "e_open($file): ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    if (!$data->[2]) {
+        warn "e_read($file) not a file EISDIR" if DEBUG;
+        return -EISDIR();
+    }
+    my $bytes = $data->[3];
+    return 0 if $off == length($bytes);
+    return substr($bytes,$off,$buf);
+}
+
+sub e_statfs {
+    warn "e_statfs(): 255,1,1,1,1,2" if DEBUG;
+    return 255, 1, 1, 1, 1, 2;
+}
+
