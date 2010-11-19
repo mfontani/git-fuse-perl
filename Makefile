@@ -12,6 +12,10 @@ stop-fuse:
 	touch test/.keep
 	rm -rf test-repos/
 
+unpack:
+	@rm -rf test-repos/
+	@tar xf test-repos.tar
+
 pushall:
 	for r in $$(git remote); do git push --all $$r; done
 
