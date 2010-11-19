@@ -5,7 +5,7 @@ start-fuse:
 	@rm -rf test-repos/
 	@tar xf test-repos.tar
 	@echo mounting test/
-	@rm mountpoint/.keep && cd test-repos/ && perl ../git-fuse ../mountpoint/ && cd ..
+	@rm mountpoint/.keep && cd test-repos/ && script -t -c 'perl ../git-fuse ../mountpoint/' ../script-$$(date +%F-%T) && cd ..
 
 stop-fuse:
 	fusermount -u mountpoint/
