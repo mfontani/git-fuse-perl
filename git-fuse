@@ -5,7 +5,7 @@ use strict;
 use warnings;
 
 use Data::Dumper;
-use Fuse;
+use Fuse qw/fuse_get_context/;
 use POSIX qw/ENOENT EISDIR EINVAL/;
 
 sub DEBUG () { 1 }
@@ -14,6 +14,8 @@ sub FILE ()  { 0100 }
 sub RONLY () { 0444 }
 sub RX ()    { 0555 }
 sub MODE { ($_[0]<<9)+$_[1] }
+
+my $BLKSZ = 10*1024;
 
 die "Must be launched from a checked-out Git repository" if (!-d '.git');
 
@@ -26,6 +28,8 @@ my $root = {
   'tags'  => { type => DIR(), mode => RX(), ctime => time(), },
 };
 
+my $pending_writes = {};
+
 Fuse::main(
   mountpoint => $mountpoint,
   getattr    => 'main::e_getattr',
@@ -33,6 +37,12 @@ Fuse::main(
   open       => 'main::e_open',
   statfs     => 'main::e_statfs',
   read       => 'main::e_read',
+  'write'    => 'main::e_write',
+  'mknod'    => 'main::e_mknod',
+  'unlink'   => 'main::e_unlink',
+  'fsync'    => 'main::e_fsync',
+  'flush'    => 'main::e_flush',
+  'truncate' => 'main::e_truncate',
   threaded   => 0,
 );
 
@@ -55,7 +65,7 @@ sub get_git_info {
         $size = qx{git cat-file -s $head:$file};
         chomp($size);
         $data = qx{git cat-file -p $head:$file};
-        $modes = MODE(FILE(),RONLY());
+        $modes = oct( (split(' ',(split("\n",qx{git ls-tree $head $file}))[0]))[0] );
     }
     warn "get_git_info($head,$file): $type, size $size" if DEBUG;
     return [$type,$modes,$size,$data];
@@ -97,8 +107,11 @@ sub e_getattr
                 }
                 my $size = length $data;
                 if ( length $data ) {
-                    warn "e_getattr($file) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks)" if DEBUG;
-                    return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks);
+                    $uid = fuse_get_context()->{"uid"};
+                    $gid = fuse_get_context()->{"gid"};
+                    my $blocks = int((length $data)/$BLKSZ)+1;
+                    warn "e_getattr($file) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks)" if DEBUG;
+                    return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks);
                 }
             }
             my $data = get_git_info($head,$path);
@@ -107,9 +120,13 @@ sub e_getattr
                 return -ENOENT();
             }
             my $modes = $data->[1];
+            $modes = MODE(FILE(),RONLY()) if ($head_or_tag eq 'tag' and $data->[0] eq 'blob');
             my $size = $data->[2];
-            warn "e_getattr($file) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks)" if DEBUG;
-            return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks);
+            $uid = fuse_get_context()->{"uid"};
+            $gid = fuse_get_context()->{"gid"};
+            my $blocks = int($size/$BLKSZ)+1;
+            warn "e_getattr($file) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks)" if DEBUG;
+            return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks);
         }
         warn "e_getattr($file): ENOENT" if DEBUG;
         return -ENOENT();
@@ -117,8 +134,11 @@ sub e_getattr
     # Existing pre-made dir
     my $modes = MODE( DIR(), RX() );
     my $size  = 0;
-    warn "e_getattr($file)(cached) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks)" if DEBUG;
-    return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks);
+    $uid = fuse_get_context()->{"uid"};
+    $gid = fuse_get_context()->{"gid"};
+    $blocks = 1;
+    warn "e_getattr($file)(cached) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks)" if DEBUG;
+    return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks);
 }
 
 sub e_getdir
@@ -279,6 +299,157 @@ sub e_read
     my $bytes = $data->[3];
     return 0 if $off == length($bytes);
     return substr($bytes,$off,$buf);
+}
+
+# Arguments:  Pathname, scalar buffer, numeric offset, file handle.  You can
+# use length($buffer) to find the buffersize.  Returns length($buffer) if
+# successful (number of bytes written).  Called in an attempt to write (or
+# overwrite) a portion of the file.  Be prepared because $buffer could contain
+# random binary data with NULs and all sorts of other wonderful stuff.
+sub e_write
+{
+    my $file = filename_fixup(shift);
+    warn "\n\n" if DEBUG;
+    my ($buf, $off, $fh) = @_;
+    my $buflen = length $buf;
+    warn "e_write($file, buflen $buflen, offset $off)" if DEBUG;
+    if ( $file !~ /^heads\/(.*)$/ ) {
+        warn "e_write($file) unimplemented ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    my $head = $1;
+    my $thing = '';
+    if ( $head =~ /^([^\/]+)\/(.*)$/ ) {
+        $head = $1;
+        $thing = $2;
+    }
+    if (!length $thing) {
+        warn "e_write($thing) cannot write to heads/ ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    warn "e_write(head $head file $thing) buflen $buflen offset $off";
+    my $data = get_git_info($head,$thing);
+    if (!defined $data->[0]) {
+        warn "e_write(head $head thing $thing): ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    if (!$data->[2]) {
+        warn "e_write(head $head thing $thing): EISDIR" if DEBUG;
+        return -EISDIR();
+    }
+    my $bytes = $off ? ( exists $pending_writes->{$file} ? $pending_writes->{$file} : $data->[3] ) : '';
+    substr($bytes,$off,length($buf),$buf);
+    $pending_writes->{$file} = $bytes;
+    warn "e_write(head $head thing $thing): returning length of buffer written: ", length $buf;
+    return length $buf;
+}
+
+sub e_fsync
+{
+    my $file = filename_fixup(shift);
+    warn "\n\n" if DEBUG;
+    my $flags = shift;
+    warn "e_fsync($file, flags $flags) => 0" if DEBUG;
+    return 0;
+}
+
+sub e_flush
+{
+    my $file = filename_fixup(shift);
+    warn "\n\n" if DEBUG;
+    warn "e_flush($file)" if DEBUG;
+    if ( !exists $pending_writes->{$file} )
+    {
+        warn "e_flush($file) not in pending writes => ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    if ( $file !~ /^heads\/(.*)$/ ) {
+        warn "e_flush($file) unimplemented ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    my $head = $1;
+    my $thing = '';
+    if ( $head =~ /^([^\/]+)\/(.*)$/ ) {
+        $head = $1;
+        $thing = $2;
+    }
+    if (!length $thing) {
+        warn "e_flush($thing) cannot write to heads/ ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    warn "e_flush(head $head file $thing)";
+    my $orig_branch = (map { s/^\* //; $_ } grep { /^\*/ } split("\n",qx{git branch}))[0];
+    qx{git checkout $head};
+    open my $w_fh, '>', $thing or do {
+        warn "e_write(head $head thing $thing): cannot open $thing on branch $head for writing: $!";
+        warn qx{git checkout $orig_branch};
+        return -ENOENT();
+    };
+    local $/=undef;
+    print $w_fh $pending_writes->{$file};
+    close $w_fh or do {
+        warn "e_write(head $head thing $thing): cannot close $thing on branch $head for writing: $!";
+        warn qx{git checkout $orig_branch};
+        return -ENOENT();
+    };
+    warn qx{git commit -m "updated $head file $thing" $thing};
+    warn qx{git checkout $orig_branch};
+    warn "e_flush($file) => 0" if DEBUG;
+    return 0;
+}
+
+sub e_mknod
+{
+    my $file = filename_fixup(shift);
+    warn "\n\n" if DEBUG;
+    my ($modes, $device) = @_;
+    warn "e_mknod($file, modes $modes, device $device)" if DEBUG;
+    warn "e_mknod($file) unimplemented ENOENT" if DEBUG;
+    return -ENOENT();
+}
+
+sub e_unlink
+{
+    my $file = filename_fixup(shift);
+    warn "\n\n" if DEBUG;
+    warn "e_unlink($file)" if DEBUG;
+    warn "e_unlink($file) unimplemented ENOENT" if DEBUG;
+    return -ENOENT();
+}
+
+sub e_truncate
+{
+    my $file = filename_fixup(shift);
+    warn "\n\n" if DEBUG;
+    my $offset = shift;
+    warn "e_truncate($file) offset $offset" if DEBUG;
+    if ( $file !~ /^heads\/(.*)$/ ) {
+        warn "e_truncate($file) unimplemented ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    my $head = $1;
+    my $thing = '';
+    if ( $head =~ /^([^\/]+)\/(.*)$/ ) {
+        $head = $1;
+        $thing = $2;
+    }
+    if (!length $thing) {
+        warn "e_truncate(head $head thing $thing) cannot truncate to heads/ ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    warn "e_truncate(head $head file $thing) offset $offset";
+    my $data = get_git_info($head,$thing);
+    if (!defined $data->[0]) {
+        warn "e_truncate(head $head thing $thing): ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    if (!$data->[2]) {
+        warn "e_truncate(head $head thing $thing): EISDIR" if DEBUG;
+        return -EISDIR();
+    }
+    warn qx{git checkout $head};
+    warn qx{truncate -s $offset $thing};
+    return 0;
 }
 
 sub e_statfs {
