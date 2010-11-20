@@ -414,8 +414,37 @@ sub e_unlink
     my $file = filename_fixup(shift);
     warn "\n\n" if DEBUG;
     warn "e_unlink($file)" if DEBUG;
-    warn "e_unlink($file) unimplemented ENOENT" if DEBUG;
-    return -ENOENT();
+    if ( $file !~ /^heads\/(.*)$/ ) {
+        warn "e_unlink($file) unimplemented ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    my $head = $1;
+    my $thing = '';
+    if ( $head =~ /^([^\/]+)\/(.*)$/ ) {
+        $head = $1;
+        $thing = $2;
+    }
+    if (!length $thing) {
+        warn "e_unlink(head $head thing $thing) cannot unlink heads/ ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    warn "e_unlink(head $head file $thing)";
+    my $data = get_git_info($head,$thing);
+    if (!defined $data->[0]) {
+        warn "e_unlink(head $head thing $thing): ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    if (!$data->[2]) {
+        warn "e_unlink(head $head thing $thing): EISDIR" if DEBUG;
+        return -EISDIR();
+    }
+    my $orig_branch = (map { s/^\* //; $_ } grep { /^\*/ } split("\n",qx{git branch}))[0];
+    qx{git checkout $head};
+    qx{git rm $thing};
+    qx{git commit $thing -m "Removed $thing"};
+    qx{git checkout $orig_branch};
+    warn "e_unlink(head $head thing $thing): removed" if DEBUG;
+    return 0;
 }
 
 sub e_truncate
