@@ -34,6 +34,9 @@ Fuse::main(
   statfs     => 'main::e_statfs',
   read       => 'main::e_read',
   'write'    => 'main::e_write',
+  'mknod'    => 'main::e_mknod',
+  'unlink'   => 'main::e_unlink',
+  'truncate' => 'main::e_truncate',
   threaded   => 0,
 );
 
@@ -324,28 +327,82 @@ sub e_write
         warn "e_write(head $head thing $thing): EISDIR" if DEBUG;
         return -EISDIR();
     }
-    my $bytes = $data->[3];
+    my $bytes = '';#$data->[3];
     substr($bytes,$off,length($buf),$buf);
     {
         my $orig_branch = (map { s/^\* //; $_ } grep { /^\*/ } split("\n",qx{git branch}))[0];
         qx{git checkout $head};
         open my $w_fh, '>', $thing or do {
             warn "e_write(head $head thing $thing): cannot open $thing on branch $head for writing: $!";
-            qx{git checkout $orig_branch};
+            warn qx{git checkout $orig_branch};
             return -ENOENT();
         };
         local $/=undef;
-        print $w_fh, $bytes;
+        print $w_fh $bytes;
         close $w_fh or do {
             warn "e_write(head $head thing $thing): cannot close $thing on branch $head for writing: $!";
-            qx{git checkout $orig_branch};
+            warn qx{git checkout $orig_branch};
             return -ENOENT();
         };
-        qx{git commit -m "updated $head file $thing" $thing};
-        qx{git checkout $orig_branch};
+        warn qx{git commit -m "updated $head file $thing" $thing};
+        warn qx{git checkout $orig_branch};
     }
     warn "e_write(head $head thing $thing): returning length of buffer written";
     return length $buf;
+}
+
+sub e_mknod
+{
+    my $file = filename_fixup(shift);
+    warn "\n\n" if DEBUG;
+    my ($modes, $device) = @_;
+    warn "e_mknod($file, modes $modes, device $device)" if DEBUG;
+    warn "e_mknod($file) unimplemented ENOENT" if DEBUG;
+    return -ENOENT();
+}
+
+sub e_unlink
+{
+    my $file = filename_fixup(shift);
+    warn "\n\n" if DEBUG;
+    warn "e_unlink($file)" if DEBUG;
+    warn "e_unlink($file) unimplemented ENOENT" if DEBUG;
+    return -ENOENT();
+}
+
+sub e_truncate
+{
+    my $file = filename_fixup(shift);
+    warn "\n\n" if DEBUG;
+    my $offset = shift;
+    warn "e_truncate($file) offset $offset" if DEBUG;
+    if ( $file !~ /^heads\/(.*)$/ ) {
+        warn "e_truncate($file) unimplemented ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    my $head = $1;
+    my $thing = '';
+    if ( $head =~ /^([^\/]+)\/(.*)$/ ) {
+        $head = $1;
+        $thing = $2;
+    }
+    if (!length $thing) {
+        warn "e_truncate(head $head thing $thing) cannot truncate to heads/ ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    warn "e_truncate(head $head file $thing) offset $offset";
+    my $data = get_git_info($head,$thing);
+    if (!defined $data->[0]) {
+        warn "e_truncate(head $head thing $thing): ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    if (!$data->[2]) {
+        warn "e_truncate(head $head thing $thing): EISDIR" if DEBUG;
+        return -EISDIR();
+    }
+    warn qx{git checkout $head};
+    warn qx{truncate -s $offset $thing};
+    return 0;
 }
 
 sub e_statfs {
