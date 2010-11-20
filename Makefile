@@ -1,4 +1,7 @@
-all:	start-fuse
+all:	test start-fuse
+
+test:
+	prove -vr tests/
 
 start-fuse:
 	@echo unpacking repos
