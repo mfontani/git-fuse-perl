@@ -1,7 +1,7 @@
 git-fuse-perl
 =============
 
-A simplistic attempt to provide a FUSE[1] read-only interface to a Git
+A simplistic attempt to provide a FUSE[1] read-write interface to a Git
 repository. The possibilities are endless ;)
 
 License
@@ -24,18 +24,20 @@ What does it do?
 Launching `git-fuse` inside a checked-out Git repository, and giving it an
 empty directory name as a parameter will make available the heads and tags of
 that Git repository as subdirectories of the mountpoint's `heads` or `tags`
-directory, and the tree files area reachable from those heads and tags as files
+directory, and the tree files are reachable from those heads and tags as files
 in the filesystem.
 
 Tags directories contain also special files showing the tag's message and
 signature verification.
 
-The directories are made available with permissions `r-xr-xr-x` and the files
-with permissions `r--r--r--`, regardless of the permissions set in the Git
-repository.
+The tags' directories are made available with permissions `r-xr-xr-x` and the
+files with permissions `r--r--r--`, regardless of the permissions set in the
+Git repository.  Files and directories on heads are instead made available with
+the permissions gathered from the Git information.  UID and GID are the ones of
+the user which fusermounts the repository.
 
 You can launch a test doing `make start-fuse`. Navigate the filesystem under
-test/ at your leisure, then issue `make stop-fuse` when bored.
+mountpoint/ at your leisure, then issue `make stop-fuse` when bored.
 
 An example?
 ==========
@@ -58,62 +60,41 @@ contains silly commits and files and branches.
 By launching "make" (or untarring and launching git-fuse separately)
 you will find the following files under the mountpoint `test/`:
 
-    $ find test/
-    test/
-    test/tags
-    test/heads
-    test/heads/pl_stuff
-    test/heads/pl_stuff/pl
-    test/heads/pl_stuff/pl/polish.txt
-    test/heads/pl_stuff/pl/hello.pl
-    test/heads/pl_stuff/b
-    test/heads/pl_stuff/b/c
-    test/heads/pl_stuff/b/c/d
-    test/heads/pl_stuff/b/c/d/e.txt
-    test/heads/pl_stuff/a
-    test/heads/pl_stuff/a/b
-    test/heads/pl_stuff/a/b/c
-    test/heads/pl_stuff/a/b/c/d
-    test/heads/pl_stuff/a/b/c/d/e.txt
-    test/heads/master
-    test/heads/master/b
-    test/heads/master/b/c
-    test/heads/master/b/c/d
-    test/heads/master/b/c/d/e.txt
-    test/heads/master/a
-    test/heads/master/a/b
-    test/heads/master/a/b/c
-    test/heads/master/a/b/c/d
-    test/heads/master/a/b/c/d/e.txt
-    test/heads/c_branch
-    test/heads/c_branch/c
-    test/heads/c_branch/c/main.c
-    test/heads/c_branch/b
-    test/heads/c_branch/b/c
-    test/heads/c_branch/b/c/d
-    test/heads/c_branch/b/c/d/e.txt
-    test/heads/c_branch/a
-    test/heads/c_branch/a/b
-    test/heads/c_branch/a/b/c
-    test/heads/c_branch/a/b/c/d
-    test/heads/c_branch/a/b/c/d/e.txt
-    test/heads/c_branch/a.out
-    test/heads/all_merged
-    test/heads/all_merged/pl
-    test/heads/all_merged/pl/polish.txt
-    test/heads/all_merged/pl/hello.pl
-    test/heads/all_merged/c
-    test/heads/all_merged/c/main.c
-    test/heads/all_merged/b
-    test/heads/all_merged/b/c
-    test/heads/all_merged/b/c/d
-    test/heads/all_merged/b/c/d/e.txt
-    test/heads/all_merged/a
-    test/heads/all_merged/a/b
-    test/heads/all_merged/a/b/c
-    test/heads/all_merged/a/b/c/d
-    test/heads/all_merged/a/b/c/d/e.txt
-    test/heads/all_merged/a.out
+    $ find mountpoint/
+    mountpoint/
+    mountpoint/tags
+    mountpoint/tags/exe_changed
+    mountpoint/tags/exe_changed/__TAG__SIGNATURE__
+    mountpoint/tags/exe_changed/__TAG__MESSAGE__
+    mountpoint/tags/exe_changed/exe
+    ...
+    mountpoint/tags/c_branch_tag_1
+    mountpoint/tags/c_branch_tag_1/__TAG__SIGNATURE__
+    mountpoint/tags/c_branch_tag_1/__TAG__MESSAGE__
+    mountpoint/tags/c_branch_tag_1/c
+    mountpoint/tags/c_branch_tag_1/c/main.c
+    mountpoint/tags/c_branch_tag_1/b
+    ...
+    mountpoint/heads
+    mountpoint/heads/pl_stuff
+    mountpoint/heads/pl_stuff/pl
+    mountpoint/heads/pl_stuff/pl/polish.txt
+    mountpoint/heads/pl_stuff/pl/hello.pl
+    ...
+    mountpoint/heads/master
+    mountpoint/heads/master/b
+    mountpoint/heads/master/b/c
+    mountpoint/heads/master/b/c/d
+    mountpoint/heads/master/b/c/d/e.txt
+    ...
+    mountpoint/heads/all_merged
+    mountpoint/heads/all_merged/pl
+    mountpoint/heads/all_merged/pl/polish.txt
+    mountpoint/heads/all_merged/pl/hello.pl
+    mountpoint/heads/all_merged/c
+    mountpoint/heads/all_merged/c/main.c
+    ...
+    mountpoint/heads/all_merged/a.out
 
 What just happened?
 ===================
@@ -126,19 +107,43 @@ Since the data is not cached, you can effectively continue working on
 your checked-out repository, and the directory structure will morph along with
 your changes.
 
+What can I do with it?
+======================
+
+    Entity | Thing | Read | Write | Create | Delete |
+    -------+-------+------+-------+--------+--------+
+    Files  | HEADs |  Y   | Y (a) | Y (b)  |   Y    |
+    Dirs   | HEADs |  Y   |  n/a  | Y (c)  |   ?    |
+    -------+-------+------+-------+--------+--------+
+    Files  | TAGs  |  Y   | N (d) | N (d)  | N (d)  |
+    Dirs   | TAGs  |  Y   | N (d) | N (d)  | N (d)  |
+    -------+-------+------+-------+--------+--------+
+
+    caveats:
+    a) one file is committed at a time, on the tip of the HEAD
+    b) a new file is committed empty, then a) happens
+    c) A `.keep` file is created inside the new directory
+       and committed.
+    d) Trees reachable from Tags are read-only.
+
+Special files or directories are also littered around the
+filesystem (sorry!). These are:
+
+In each tags' first directory ( mountpoint/tag/tagname/ ) there
+are two special files:
+
+    \_\_TAG\_\_MESSAGE\_\_    shows the message associated with the tag
+    \_\_TAG\_\_SIGNATURE\_\_  shows the GPG signature of the tag
+
 Bugs? Worries?
 ==============
 
-Files and directories are returned with id and gid of 0
-(root, hence the conservative permissions). The code uses qx{} for shelling out
-to Git for getting information about trees and blobs. Hopefully this should be
-moved to using git-pureperl[7] or a better (faster?) interface. There is a bit
-of code repetition when splitting the paths for the heads and tags.
+The code uses qx{} for shelling out to Git for getting information about trees
+and blobs. Hopefully this should be moved to using git-pureperl[7] or a better
+(faster?) interface. There is a lot of code repetition when splitting the paths
+for the heads and tags.
 
-I am quite amazed it does cd, ls and cat, to be perfectly honest.
-
-Additional "special" files have been implemented to show a tag's message and
-signature verification.
+I am quite amazed it does cd, ls, cat and touch, to be perfectly honest.
 
 [1]: http://fuse.sourceforge.net/
 [2]: http://dev.perl.org/licenses/gpl1.html
