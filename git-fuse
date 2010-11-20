@@ -123,6 +123,20 @@ sub e_getattr
                     return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks);
                 }
             }
+            if ( $head_or_tag eq 'heads' and length $head ) {
+                my $data  = '';
+                if ( $path =~ /^((?:__PARENT__\/)+)$/ ) {
+                    warn "e_getattr($file): $head_or_tag $head path $path EISDIR PARENT/..." if DEBUG;
+                    return -ENOENT() if !length $data;
+                } elsif ( $path =~ /^((?:__PARENT__\/)+)([^\/]*)\/?$/ ) {
+                    my $parents_str = $1;
+                    my $file_str = $2;
+                    my @paths = split('/', $parents_str);
+                    $head = "$head" . ('^' x scalar @paths);
+                    $path = $file_str;
+                    warn "e_getattr($file): $head_or_tag $head path $path => $head $path..." if DEBUG;
+                }
+            }
             my $data = get_git_info($head,$path);
             if (!defined $data->[0]) {
                 warn "e_getattr($file): ENOENT" if DEBUG;
@@ -198,6 +212,9 @@ sub e_getdir
         # inject special files
         if ( $tag_or_head eq 'tags' and $path eq '' ) {
             push @things, ('__TAG__MESSAGE__', '__TAG__SIGNATURE__');
+        }
+        if ( $tag_or_head eq 'heads' and ($path eq '' or $path =~ /^(__PARENT__\/)+$/ )) {
+            push @things, ('__PARENT__');
         }
         warn "e_getdir($where) (ls-tree) => @things, 0" if DEBUG;
         return @things, 0;
