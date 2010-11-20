@@ -28,6 +28,8 @@ my $root = {
   'tags'  => { type => DIR(), mode => RX(), ctime => time(), },
 };
 
+my $pending_writes = {};
+
 Fuse::main(
   mountpoint => $mountpoint,
   getattr    => 'main::e_getattr',
@@ -335,26 +337,9 @@ sub e_write
         warn "e_write(head $head thing $thing): EISDIR" if DEBUG;
         return -EISDIR();
     }
-    my $bytes = $off ? $data->[3] : '';
+    my $bytes = $off ? ( exists $pending_writes->{$file} ? $pending_writes->{$file} : $data->[3] ) : '';
     substr($bytes,$off,length($buf),$buf);
-    {
-        my $orig_branch = (map { s/^\* //; $_ } grep { /^\*/ } split("\n",qx{git branch}))[0];
-        qx{git checkout $head};
-        open my $w_fh, '>', $thing or do {
-            warn "e_write(head $head thing $thing): cannot open $thing on branch $head for writing: $!";
-            warn qx{git checkout $orig_branch};
-            return -ENOENT();
-        };
-        local $/=undef;
-        print $w_fh $bytes;
-        close $w_fh or do {
-            warn "e_write(head $head thing $thing): cannot close $thing on branch $head for writing: $!";
-            warn qx{git checkout $orig_branch};
-            return -ENOENT();
-        };
-        warn qx{git commit -m "updated $head file $thing" $thing};
-        warn qx{git checkout $orig_branch};
-    }
+    $pending_writes->{$file} = $bytes;
     warn "e_write(head $head thing $thing): returning length of buffer written: ", length $buf;
     return length $buf;
 }
@@ -372,6 +357,43 @@ sub e_flush
 {
     my $file = filename_fixup(shift);
     warn "\n\n" if DEBUG;
+    warn "e_flush($file)" if DEBUG;
+    if ( !exists $pending_writes->{$file} )
+    {
+        warn "e_flush($file) not in pending writes => ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    if ( $file !~ /^heads\/(.*)$/ ) {
+        warn "e_flush($file) unimplemented ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    my $head = $1;
+    my $thing = '';
+    if ( $head =~ /^([^\/]+)\/(.*)$/ ) {
+        $head = $1;
+        $thing = $2;
+    }
+    if (!length $thing) {
+        warn "e_flush($thing) cannot write to heads/ ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    warn "e_flush(head $head file $thing)";
+    my $orig_branch = (map { s/^\* //; $_ } grep { /^\*/ } split("\n",qx{git branch}))[0];
+    qx{git checkout $head};
+    open my $w_fh, '>', $thing or do {
+        warn "e_write(head $head thing $thing): cannot open $thing on branch $head for writing: $!";
+        warn qx{git checkout $orig_branch};
+        return -ENOENT();
+    };
+    local $/=undef;
+    print $w_fh $pending_writes->{$file};
+    close $w_fh or do {
+        warn "e_write(head $head thing $thing): cannot close $thing on branch $head for writing: $!";
+        warn qx{git checkout $orig_branch};
+        return -ENOENT();
+    };
+    warn qx{git commit -m "updated $head file $thing" $thing};
+    warn qx{git checkout $orig_branch};
     warn "e_flush($file) => 0" if DEBUG;
     return 0;
 }
