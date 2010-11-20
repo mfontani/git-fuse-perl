@@ -448,8 +448,9 @@ sub e_truncate
         warn "e_truncate(head $head thing $thing): EISDIR" if DEBUG;
         return -EISDIR();
     }
-    warn qx{git checkout $head};
-    warn qx{truncate -s $offset $thing};
+    ### No need to truncate anything actually
+    #warn qx{git checkout $head};
+    #warn qx{truncate -s $offset $thing};
     return 0;
 }
 
