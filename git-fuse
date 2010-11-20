@@ -33,6 +33,7 @@ Fuse::main(
   open       => 'main::e_open',
   statfs     => 'main::e_statfs',
   read       => 'main::e_read',
+  'write'    => 'main::e_write',
   threaded   => 0,
 );
 
@@ -279,6 +280,65 @@ sub e_read
     my $bytes = $data->[3];
     return 0 if $off == length($bytes);
     return substr($bytes,$off,$buf);
+}
+
+# Arguments:  Pathname, scalar buffer, numeric offset, file handle.  You can
+# use length($buffer) to find the buffersize.  Returns length($buffer) if
+# successful (number of bytes written).  Called in an attempt to write (or
+# overwrite) a portion of the file.  Be prepared because $buffer could contain
+# random binary data with NULs and all sorts of other wonderful stuff.
+sub e_write
+{
+    my $file = filename_fixup(shift);
+    warn "\n\n" if DEBUG;
+    my ($buf, $off, $fh) = @_;
+    warn "e_write($file, buf $buf, offset $off)" if DEBUG;
+    if ( $file !~ /^heads\/(.*)$/ ) {
+        warn "e_write($file) unimplemented ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    my $head = $1;
+    my $thing = '';
+    if ( $head =~ /^([^\/]+)\/(.*)$/ ) {
+        $head = $1;
+        $thing = $2;
+    }
+    if (!length $thing) {
+        warn "e_write($thing) cannot write to heads/ ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    warn "e_write(head $head file $thing) buf $buf offset $off";
+    my $data = get_git_info($head,$thing);
+    if (!defined $data->[0]) {
+        warn "e_write(head $head thing $thing): ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    if (!$data->[2]) {
+        warn "e_write(head $head thing $thing): EISDIR" if DEBUG;
+        return -EISDIR();
+    }
+    my $bytes = $data->[3];
+    substr($bytes,$off,length($buf),$buf);
+    {
+        my $orig_branch = (map { s/^\* //; $_ } grep { /^\*/ } split("\n",qx{git branch}))[0];
+        qx{git checkout $head};
+        open my $w_fh, '>', $thing or do {
+            warn "e_write(head $head thing $thing): cannot open $thing on branch $head for writing: $!";
+            qx{git checkout $orig_branch};
+            return -ENOENT();
+        };
+        local $/=undef;
+        print $w_fh, $bytes;
+        close $w_fh or do {
+            warn "e_write(head $head thing $thing): cannot close $thing on branch $head for writing: $!";
+            qx{git checkout $orig_branch};
+            return -ENOENT();
+        };
+        qx{git commit -m "updated $head file $thing" $thing};
+        qx{git checkout $orig_branch};
+    }
+    warn "e_write(head $head thing $thing): returning length of buffer written";
+    return length $buf;
 }
 
 sub e_statfs {
