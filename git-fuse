@@ -335,7 +335,7 @@ sub e_write
         warn "e_write(head $head thing $thing): ENOENT" if DEBUG;
         return -ENOENT();
     }
-    if (!$data->[2]) {
+    if ($data->[0] eq 'tree') {
         warn "e_write(head $head thing $thing): EISDIR" if DEBUG;
         return -EISDIR();
     }
@@ -362,8 +362,8 @@ sub e_flush
     warn "e_flush($file)" if DEBUG;
     if ( !exists $pending_writes->{$file} )
     {
-        warn "e_flush($file) not in pending writes => ENOENT" if DEBUG;
-        return -ENOENT();
+        warn "e_flush($file) not in pending writes => 0" if DEBUG;
+        return 0;
     }
     if ( $file !~ /^heads\/(.*)$/ ) {
         warn "e_flush($file) unimplemented ENOENT" if DEBUG;
@@ -406,8 +406,29 @@ sub e_mknod
     warn "\n\n" if DEBUG;
     my ($modes, $device) = @_;
     warn "e_mknod($file, modes $modes, device $device)" if DEBUG;
-    warn "e_mknod($file) unimplemented ENOENT" if DEBUG;
-    return -ENOENT();
+    if ( $file !~ /^heads\/(.*)$/ ) {
+        warn "e_mknod($file) not on heads ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    my $head = $1;
+    my $thing = '';
+    if ( $head =~ /^([^\/]+)\/(.*)$/ ) {
+        $head = $1;
+        $thing = $2;
+    }
+    if (!length $thing) {
+        warn "e_mknod(head $head thing $thing) cannot mknod heads/ EEXIST" if DEBUG;
+        return -EEXIST();
+    }
+    warn "e_mknod(head $head file $thing)";
+    my $orig_branch = (map { s/^\* //; $_ } grep { /^\*/ } split("\n",qx{git branch}))[0];
+    qx{git checkout $head};
+    qx{touch $thing};
+    qx{git add $thing};
+    qx{git commit $thing -m "Created empty file $thing"};
+    qx{git checkout $orig_branch};
+    warn "e_mknod(head $head thing $thing): created $thing" if DEBUG;
+    return 0;
 }
 
 sub e_mkdir
