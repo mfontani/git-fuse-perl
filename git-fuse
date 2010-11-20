@@ -5,7 +5,7 @@ use strict;
 use warnings;
 
 use Data::Dumper;
-use Fuse;
+use Fuse qw/fuse_get_context/;
 use POSIX qw/ENOENT EISDIR EINVAL/;
 
 sub DEBUG () { 1 }
@@ -98,6 +98,8 @@ sub e_getattr
                 }
                 my $size = length $data;
                 if ( length $data ) {
+                    $uid = fuse_get_context()->{"uid"};
+                    $gid = fuse_get_context()->{"gid"};
                     warn "e_getattr($file) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks)" if DEBUG;
                     return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks);
                 }
@@ -110,6 +112,8 @@ sub e_getattr
             my $modes = $data->[1];
             $modes = MODE(FILE(),RONLY()) if ($head_or_tag eq 'tag' and $data->[0] eq 'blob');
             my $size = $data->[2];
+            $uid = fuse_get_context()->{"uid"};
+            $gid = fuse_get_context()->{"gid"};
             warn "e_getattr($file) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks)" if DEBUG;
             return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks);
         }
@@ -119,6 +123,8 @@ sub e_getattr
     # Existing pre-made dir
     my $modes = MODE( DIR(), RX() );
     my $size  = 0;
+    $uid = fuse_get_context()->{"uid"};
+    $gid = fuse_get_context()->{"gid"};
     warn "e_getattr($file)(cached) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks)" if DEBUG;
     return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks);
 }
