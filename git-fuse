@@ -40,6 +40,7 @@ Fuse::main(
   read       => 'main::e_read',
   'write'    => 'main::e_write',
   'mknod'    => 'main::e_mknod',
+  'mkdir'    => 'main::e_mkdir',
   'unlink'   => 'main::e_unlink',
   'fsync'    => 'main::e_fsync',
   'flush'    => 'main::e_flush',
@@ -407,6 +408,38 @@ sub e_mknod
     warn "e_mknod($file, modes $modes, device $device)" if DEBUG;
     warn "e_mknod($file) unimplemented ENOENT" if DEBUG;
     return -ENOENT();
+}
+
+sub e_mkdir
+{
+    my $newpath = filename_fixup(shift);
+    warn "\n\n" if DEBUG;
+    my $modes = shift;
+    warn "e_mkdir($newpath, modes $modes)" if DEBUG;
+    if ( $newpath !~ /^heads\/(.*)$/ ) {
+        warn "e_mkdir($newpath) not on heads ENOENT" if DEBUG;
+        return -ENOENT();
+    }
+    my $head = $1;
+    my $thing = '';
+    if ( $head =~ /^([^\/]+)\/(.*)$/ ) {
+        $head = $1;
+        $thing = $2;
+    }
+    if (!length $thing) {
+        warn "e_mkdir(head $head thing $thing) cannot mkdir heads/ EEXIST" if DEBUG;
+        return -EEXIST();
+    }
+    warn "e_mkdir(head $head file $thing)";
+    my $orig_branch = (map { s/^\* //; $_ } grep { /^\*/ } split("\n",qx{git branch}))[0];
+    qx{git checkout $head};
+    qx{mkdir -vp $thing};
+    qx{touch $thing/.keep};
+    qx{git add $thing/.keep};
+    qx{git commit $thing/.keep -m "Created directory $thing"};
+    qx{git checkout $orig_branch};
+    warn "e_mkdir(head $head thing $thing): created $thing/.keep" if DEBUG;
+    return 0;
 }
 
 sub e_unlink
