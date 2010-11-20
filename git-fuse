@@ -79,6 +79,28 @@ sub e_getattr
                 $path = $2;
                 warn "e_getattr($file): $head_or_tag $head path $path" if DEBUG;
             }
+            if ( $head_or_tag eq 'tags' and length $head ) {
+                my $data  = '';
+                my $modes = MODE(FILE(),RONLY());
+                if ( $path eq '__TAG__MESSAGE__' ) {
+                    $data = qx{git tag -ln $head};
+                    if (!length $data) {
+                        warn "e_getattr($file): $head_or_tag $head path $path ENOENT no such tag" if DEBUG;
+                        return -ENOENT() if !length $data;
+                    }
+                } elsif ( $path eq '__TAG__SIGNATURE__' ) {
+                    $data = qx{git tag -v $head 2>&1};
+                    if (!length $data or $data =~ /^error: tag \`\Q$head\E\` not found\s*$/sm) {
+                        warn "e_getattr($file): $head_or_tag $head path $path ENOENT no such tag" if DEBUG;
+                        return -ENOENT() if !length $data;
+                    }
+                }
+                my $size = length $data;
+                if ( length $data ) {
+                    warn "e_getattr($file) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks)" if DEBUG;
+                    return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks);
+                }
+            }
             my $data = get_git_info($head,$path);
             if (!defined $data->[0]) {
                 warn "e_getattr($file): ENOENT" if DEBUG;
@@ -144,6 +166,10 @@ sub e_getdir
             my ($perm,$kind,$sha) = split(" ", $stuff);
             push @things, $name;
         }
+        # inject special files
+        if ( $tag_or_head eq 'tags' and $path eq '' ) {
+            push @things, ('__TAG__MESSAGE__', '__TAG__SIGNATURE__');
+        }
         warn "e_getdir($where) (ls-tree) => @things, 0" if DEBUG;
         return @things, 0;
     }
@@ -158,15 +184,37 @@ sub e_open {
         warn "e_open($file) OK is a root file, 0" if DEBUG;
         return 0;
     }
-    if ( $file !~ /^heads\/(.*)$/ ) {
+    if ( $file !~ /^(tags|heads)\/(.*)$/ ) {
         warn "e_open($file) unimplemented ENOENT" if DEBUG;
         return -ENOENT();
     }
-    my $head = $1;
+    my $head_or_tag = $1;
+    my $head = $2;
     my $thing = '';
     if ( $head =~ /^([^\/]+)\/(.*)$/ ) {
         $head = $1;
         $thing = $2;
+    }
+    if ( $head_or_tag eq 'tags' and length $head ) {
+        my $data = '';
+        if ( $thing eq '__TAG__MESSAGE__' ) {
+            $data = qx{git tag -ln $head};
+            if (!length $data) {
+                warn "e_open($file): $head_or_tag $head path $thing ENOENT no such tag" if DEBUG;
+                return -ENOENT() if !length $data;
+            }
+        } elsif ( $thing eq '__TAG__SIGNATURE__' ) {
+            $data = qx{git tag -v $head 2>&1};
+            if (!length $data or $data =~ /^error: tag \`\Q$head\E\` not found\s*$/sm) {
+                warn "e_open($file): $head_or_tag $head path $thing ENOENT no such tag" if DEBUG;
+                return -ENOENT() if !length $data;
+            }
+        }
+        my $size = length $data;
+        if ( length $data ) {
+            warn "e_open($file) OK is a file, 0" if DEBUG;
+            return 0;
+        }
     }
     my $data = get_git_info($head,$thing);
     if (!defined $data->[0]) {
@@ -187,15 +235,37 @@ sub e_read
     warn "\n\n" if DEBUG;
     my ($buf, $off) = @_;
     warn "e_read($file, buf $buf, offset $off)" if DEBUG;
-    if ( $file !~ /^heads\/(.*)$/ ) {
+    if ( $file !~ /^(tags|heads)\/(.*)$/ ) {
         warn "e_open($file) unimplemented ENOENT" if DEBUG;
         return -ENOENT();
     }
-    my $head = $1;
+    my $head_or_tag = $1;
+    my $head = $2;
     my $thing = '';
     if ( $head =~ /^([^\/]+)\/(.*)$/ ) {
         $head = $1;
         $thing = $2;
+    }
+    if ( $head_or_tag eq 'tags' and length $head ) {
+        my $data = '';
+        if ( $thing eq '__TAG__MESSAGE__' ) {
+            $data = qx{git tag -ln $head};
+            if (!length $data) {
+                warn "e_read($file): $head_or_tag $head path $thing ENOENT no such tag" if DEBUG;
+                return -ENOENT() if !length $data;
+            }
+        } elsif ( $thing eq '__TAG__SIGNATURE__' ) {
+            $data = qx{git tag -v $head 2>&1};
+            if (!length $data or $data =~ /^error: tag \`\Q$head\E\` not found\s*$/sm) {
+                warn "e_read($file): $head_or_tag $head path $thing ENOENT no such tag" if DEBUG;
+                return -ENOENT() if !length $data;
+            }
+        }
+        my $size = length $data;
+        if ( length $data ) {
+            return 0 if $off == length($data);
+            return substr($data,$off,$buf);
+        }
     }
     my $data = get_git_info($head,$thing);
     if (!defined $data->[0]) {
