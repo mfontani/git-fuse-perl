@@ -70,13 +70,14 @@ sub e_getattr
     my ($atime,$mtime,$ctime) = (time,time,time);
     if (!exists $root->{$file})
     {
-        if ($file =~ /^heads\/(.*)$/) {
-            my $head = $1;
+        if ($file =~ /^(heads|tags)\/(.*)$/) {
+            my $head_or_tag = $1;
+            my $head = $2;
             my $path = '';
             if ( $head =~ /^([^\/]*)\/(.*)$/ ) {
                 $head = $1;
                 $path = $2;
-                warn "e_getattr($file): head $head path $path" if DEBUG;
+                warn "e_getattr($file): $head_or_tag $head path $path" if DEBUG;
             }
             my $data = get_git_info($head,$path);
             if (!defined $data->[0]) {
@@ -118,8 +119,9 @@ sub e_getdir
         warn "e_getdir($where) (heads)=> @heads, 0" if DEBUG;
         return @heads, 0;
     }
-    if ( $where =~ m/^\/?heads\/(.*)$/ ) {
-        my $head = $1;
+    if ( $where =~ m/^\/?(tags|heads)\/(.*)$/ ) {
+        my $tag_or_head = $1;
+        my $head = $2;
         my $path = '';
         my $thing = $head;
         if ( $head =~ /^([^\/]*)\/(.*)$/ ) {
@@ -129,7 +131,7 @@ sub e_getdir
         }
         my @lines = qx{git ls-tree $thing};
         warn "e_getdir($where): executed 'git ls-tree $thing'" if DEBUG;
-        warn "e_getdir($where) (head $head path $path): ls-tree $thing\n@lines\n" if DEBUG;
+        warn "e_getdir($where) ($tag_or_head $head path $path): ls-tree $thing\n@lines\n" if DEBUG;
         chomp @lines;
         if (!@lines) {
             warn "e_getdir($where) ($head|$path) => empty ls-tree => ENOENT" if DEBUG;
@@ -214,3 +216,4 @@ sub e_statfs {
     return 255, 1, 1, 1, 1, 2;
 }
 
+# vim: set expandtab ts=4 sw=4 foldmethod=marker:

@@ -5,12 +5,16 @@ start-fuse:
 	@rm -rf test-repos/
 	@tar xf test-repos.tar
 	@echo mounting test/
-	@rm test/.keep && cd test-repos/ && perl ../git-fuse ../test/ && cd ..
+	@rm mountpoint/.keep && cd test-repos/ && script -t -c 'perl ../git-fuse ../mountpoint/' ../script-$$(date +%F-%T) && cd ..
 
 stop-fuse:
-	fusermount -u test/
-	touch test/.keep
+	fusermount -u mountpoint/
+	touch mountpoint/.keep
 	rm -rf test-repos/
+
+unpack:
+	@rm -rf test-repos/
+	@tar xf test-repos.tar
 
 pushall:
 	for r in $$(git remote); do git push --all $$r; done
