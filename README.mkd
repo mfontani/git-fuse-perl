@@ -22,9 +22,13 @@ What does it do?
 ===============
 
 Launching `git-fuse` inside a checked-out Git repository, and giving it an
-empty directory name as a parameter will make available the heads of that Git
-repository as subdirectories of the mountpoint's `heads` directory,, and the
-tree files reachable from those heads as files in the filesystem.
+empty directory name as a parameter will make available the heads and tags of
+that Git repository as subdirectories of the mountpoint's `heads` or `tags`
+directory, and the tree files area reachable from those heads and tags as files
+in the filesystem.
+
+Tags directories contain also special files showing the tag's message and
+signature verification.
 
 The directories are made available with permissions `r-xr-xr-x` and the files
 with permissions `r--r--r--`, regardless of the permissions set in the Git
@@ -116,22 +120,25 @@ What just happened?
 
 Your Git repository is made available as a filesystem. What you do with that is
 entirely up to you. Here's some suggestions: make available all your branches
-of a website as separate hostnames; visually navigate the (branches') history
-of a repository via your favourite file manager; write patches so tags also
-work.  Since the data is not cached, you can effectively continuing working on
+of a website as separate hostnames; visually navigate the (branches' or tags')
+history of a repository via your favourite file manager.
+Since the data is not cached, you can effectively continue working on
 your checked-out repository, and the directory structure will morph along with
 your changes.
 
 Bugs? Worries?
 ==============
 
-Tags do not (yet) work. Files and directories are returned with id and gid of 0
+Files and directories are returned with id and gid of 0
 (root, hence the conservative permissions). The code uses qx{} for shelling out
 to Git for getting information about trees and blobs. Hopefully this should be
 moved to using git-pureperl[7] or a better (faster?) interface. There is a bit
-of code repetition when splitting the paths for the heads.
+of code repetition when splitting the paths for the heads and tags.
 
 I am quite amazed it does cd, ls and cat, to be perfectly honest.
+
+Additional "special" files have been implemented to show a tag's message and
+signature verification.
 
 [1]: http://fuse.sourceforge.net/
 [2]: http://dev.perl.org/licenses/gpl1.html
