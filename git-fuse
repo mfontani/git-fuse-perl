@@ -125,9 +125,11 @@ sub e_getattr
             }
             if ( $head_or_tag eq 'heads' and length $head ) {
                 my $data  = '';
-                if ( $path =~ /^((?:__PARENT__\/)+)$/ ) {
-                    warn "e_getattr($file): $head_or_tag $head path $path EISDIR PARENT/..." if DEBUG;
-                    return -ENOENT() if !length $data;
+                if ( $path eq '__PARENT__' or $path =~ /^((?:__PARENT__\/)+)$/ ) {
+                    my $modes = MODE(DIR(),RONLY());
+                    my $size = 0;
+                    warn "e_getattr($file -- $path) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks)" if DEBUG;
+                    return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks);
                 } elsif ( $path =~ /^((?:__PARENT__\/)+)([^\/]*)\/?$/ ) {
                     my $parents_str = $1;
                     my $file_str = $2;
