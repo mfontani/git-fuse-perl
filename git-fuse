@@ -28,7 +28,8 @@ my $root = {
   'tags'  => { type => DIR(), mode => RX(), ctime => time(), },
 };
 
-my $pending_writes = {};
+my $pending_writes   = {};    # tracks contents for pending writes before flush
+my $pending_truncate = {};    # tracks contents for pending deletions before flush
 
 Fuse::main(
   mountpoint => $mountpoint,
