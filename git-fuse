@@ -15,6 +15,8 @@ sub RONLY () { 0444 }
 sub RX ()    { 0555 }
 sub MODE { ($_[0]<<9)+$_[1] }
 
+my $BLKSZ = 10*1024;
+
 die "Must be launched from a checked-out Git repository" if (!-d '.git');
 
 my $mountpoint = shift;
@@ -36,6 +38,8 @@ Fuse::main(
   'write'    => 'main::e_write',
   'mknod'    => 'main::e_mknod',
   'unlink'   => 'main::e_unlink',
+  'fsync'    => 'main::e_fsync',
+  'flush'    => 'main::e_flush',
   'truncate' => 'main::e_truncate',
   threaded   => 0,
 );
@@ -103,8 +107,9 @@ sub e_getattr
                 if ( length $data ) {
                     $uid = fuse_get_context()->{"uid"};
                     $gid = fuse_get_context()->{"gid"};
-                    warn "e_getattr($file) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks)" if DEBUG;
-                    return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks);
+                    my $blocks = int((length $data)/$BLKSZ)+1;
+                    warn "e_getattr($file) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks)" if DEBUG;
+                    return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks);
                 }
             }
             my $data = get_git_info($head,$path);
@@ -117,8 +122,9 @@ sub e_getattr
             my $size = $data->[2];
             $uid = fuse_get_context()->{"uid"};
             $gid = fuse_get_context()->{"gid"};
-            warn "e_getattr($file) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks)" if DEBUG;
-            return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks);
+            my $blocks = int($size/$BLKSZ)+1;
+            warn "e_getattr($file) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks)" if DEBUG;
+            return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks);
         }
         warn "e_getattr($file): ENOENT" if DEBUG;
         return -ENOENT();
@@ -128,8 +134,9 @@ sub e_getattr
     my $size  = 0;
     $uid = fuse_get_context()->{"uid"};
     $gid = fuse_get_context()->{"gid"};
-    warn "e_getattr($file)(cached) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks)" if DEBUG;
-    return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks);
+    $blocks = 1;
+    warn "e_getattr($file)(cached) => ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks)" if DEBUG;
+    return ($dev,$ino,$modes,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$BLKSZ,$blocks);
 }
 
 sub e_getdir
@@ -302,7 +309,8 @@ sub e_write
     my $file = filename_fixup(shift);
     warn "\n\n" if DEBUG;
     my ($buf, $off, $fh) = @_;
-    warn "e_write($file, buf $buf, offset $off)" if DEBUG;
+    my $buflen = length $buf;
+    warn "e_write($file, buflen $buflen, offset $off)" if DEBUG;
     if ( $file !~ /^heads\/(.*)$/ ) {
         warn "e_write($file) unimplemented ENOENT" if DEBUG;
         return -ENOENT();
@@ -317,7 +325,7 @@ sub e_write
         warn "e_write($thing) cannot write to heads/ ENOENT" if DEBUG;
         return -ENOENT();
     }
-    warn "e_write(head $head file $thing) buf $buf offset $off";
+    warn "e_write(head $head file $thing) buflen $buflen offset $off";
     my $data = get_git_info($head,$thing);
     if (!defined $data->[0]) {
         warn "e_write(head $head thing $thing): ENOENT" if DEBUG;
@@ -327,7 +335,7 @@ sub e_write
         warn "e_write(head $head thing $thing): EISDIR" if DEBUG;
         return -EISDIR();
     }
-    my $bytes = '';#$data->[3];
+    my $bytes = $off ? $data->[3] : '';
     substr($bytes,$off,length($buf),$buf);
     {
         my $orig_branch = (map { s/^\* //; $_ } grep { /^\*/ } split("\n",qx{git branch}))[0];
@@ -347,8 +355,25 @@ sub e_write
         warn qx{git commit -m "updated $head file $thing" $thing};
         warn qx{git checkout $orig_branch};
     }
-    warn "e_write(head $head thing $thing): returning length of buffer written";
+    warn "e_write(head $head thing $thing): returning length of buffer written: ", length $buf;
     return length $buf;
+}
+
+sub e_fsync
+{
+    my $file = filename_fixup(shift);
+    warn "\n\n" if DEBUG;
+    my $flags = shift;
+    warn "e_fsync($file, flags $flags) => 0" if DEBUG;
+    return 0;
+}
+
+sub e_flush
+{
+    my $file = filename_fixup(shift);
+    warn "\n\n" if DEBUG;
+    warn "e_flush($file) => 0" if DEBUG;
+    return 0;
 }
 
 sub e_mknod
