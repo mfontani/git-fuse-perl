@@ -6,6 +6,7 @@ use warnings;
 
 use Data::Dumper;
 use Fuse qw/fuse_get_context/;
+use Getopt::Std qw/getopts/;
 use POSIX qw/ENOENT EISDIR EINVAL/;
 
 sub DEBUG () { 1 }
@@ -17,10 +18,14 @@ sub MODE { ($_[0]<<9)+$_[1] }
 
 my $BLKSZ = 10*1024;
 
-die "Must be launched from a checked-out Git repository" if (!-d '.git');
+my $cdup = `git rev-parse --show-cdup 2>/dev/null`;
+die "Must be launched from a checked-out or bare Git repository" if $?;
+chomp $cdup;
+chdir $cdup if $cdup;
 
-my $mountpoint = shift;
-die "Usage: $0 mountpoint" if !defined $mountpoint;
+our $opt_o = '';
+getopts('o:') and my $mountpoint = shift or
+  die "Usage: $0 [-o opt[,opt...]] mountpoint";
 
 my $root = {
   '.'     => { type => DIR(), mode => RX(), ctime => time(), },
@@ -46,6 +51,7 @@ Fuse::main(
   'flush'    => 'main::e_flush',
   'truncate' => 'main::e_truncate',
   threaded   => 0,
+  mountopts  => $opt_o,
 );
 
 sub filename_fixup { $_[0] =~ s!^/!!; $_[0] = '.' unless length $_[0]; $_[0] }
