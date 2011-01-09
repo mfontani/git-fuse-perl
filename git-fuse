@@ -24,8 +24,9 @@ chomp $cdup;
 chdir $cdup if $cdup;
 
 our $opt_o = '';
-getopts('o:') and my $mountpoint = shift or
+getopts('o:') or
   die "Usage: $0 [-o opt[,opt...]] mountpoint";
+my $mountpoint = shift;
 
 my $root = {
   '.'     => { type => DIR(), mode => RX(), ctime => time(), },
